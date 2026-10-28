@@ -1,50 +1,61 @@
-# Task set and success criteria — fill this in BEFORE the run
+# Task set and success criteria: fill this in before the run
 
-The point is to produce a number that cannot be accused of being fitted after the fact.
+The whole point is a number nobody can accuse you of fitting afterwards. So write the
+task list and the pass conditions down first, then run.
 
-## 1. Run frame (fill in advance)
+## 1. Frame of the run
 
-- agent: ...
-- model and version: ...
+- agent:
+- model and version:
 - dates: from ... to ...
-- repository / project type: ...
-- agent internet access: yes / no
-- attempt limit per task: ...
-- pricing model (subscription / per token): ...
-- what counts as one attempt: ...
+- repository or project type:
+- does the agent have internet access: yes / no
+- attempt limit per task:
+- pricing model: subscription or per token
+- what counts as one attempt:
 
 ## 2. The task set
 
-Rules:
+Ten to twenty tasks. Fewer than ten solved and you are publishing a method, not a
+benchmark, so plan the write-up accordingly.
 
-- **10-20 tasks.** Fewer than 10 solved -> publish a *method*, not a benchmark.
-- **Publishable tasks only:** no secrets, no private code, no client data.
-- **Mixed by size:** 4-5 small (one-file edit), 6-8 medium (several files, a test),
-  2-3 large (refactor, new feature).
-- **Mixed by type:** bug fix, adding a test, refactoring, dependency update, error
-  handling, interface change.
-- **Machine-checkable criteria where possible:** a test command, a linter, a build.
-  Where that is impossible, write down in advance what "done" means.
+Publishable tasks only. No secrets, no private code, no client data, otherwise you can
+never show the log.
 
-Template:
+Mix the sizes: four or five small ones (a single-file edit), six to eight medium (several
+files plus a test), two or three large (a refactor, a new feature). Mix the types as well:
+bug fix, test, refactor, dependency update, error handling, interface change.
 
-| # | Task | Type | Size | Success criterion (checkable) | Attempts planned |
+Where you can, make the pass condition machine-checkable: a test command, a linter, a
+build. Where you can't, write down in advance what "done" means, in your own words, and
+hold yourself to it.
+
+| # | Task | Type | Size | Success criterion | Attempts planned |
 |---|---|---|---|---|---|
 | t1 | | bug fix | S | `pytest tests/test_x.py` green | 1 |
-| t2 | | test | S | test fails before the change, passes after | 1 |
-| ... | | | | | |
+| t2 | | test | S | fails before the change, passes after | 1 |
+| | | | | | |
 
 ## 3. What to record per attempt
 
-`task_id, outcome, attempt_no, input_tokens, cached_tokens, output_tokens, tool_calls, duration_min, cost_usd`
+```
+task_id, outcome, attempt_no, input_tokens, cached_tokens, output_tokens,
+tool_calls, duration_min, cost_usd
+```
 
-- `outcome` — only `success` / `fail`, judged by the criterion from the table above.
-- `cost_usd` — from the provider export/dashboard, or computed from the model price.
-  Unknown price: leave it empty; the script will warn you instead of pretending.
-- `cached_tokens` — the number readers care about most: how much input came from cache.
-- `duration_min` — wall clock, not "model time".
-- Keep manual review time separately (it is not in the CSV) and include it only via
-  `--review-rate N`, so it shows up as an explicit assumption.
+`outcome` is only `success` or `fail`, decided by the criterion from the table above.
+
+`cost_usd` comes from the provider export or dashboard, or from the model price. If you
+don't know a price, leave the cell empty. The script marks all cost figures as partial and
+tells you not to publish them as complete, which is better than being confidently wrong.
+
+`cached_tokens` is the field readers ask about most, because context drives the bill far
+more than generation does.
+
+`duration_min` is wall clock, not time the model spent thinking.
+
+Keep manual review time in your own notes rather than in the CSV, and bring it into the
+report only through `--review-rate N`, so it shows up as a stated assumption.
 
 ## 4. After the run
 
@@ -52,17 +63,14 @@ Template:
 python3 parse.py mylog.csv --out report.csv
 ```
 
-Check that:
+Then check three things. No rows should have a missing `cost_usd`, or the number is not
+trustworthy. Solved tasks should be ten or more, or the write-up says "method" instead of
+"benchmark". And the per-task report should add up to the figure in your post, because
+that is the first thing a reader will verify.
 
-- no rows in the report have a missing `cost_usd` — otherwise the number is not trustworthy;
-- solved tasks >= 10, otherwise the write-up says "method", not "benchmark";
-- the per-task report sums to the headline number in your post — it is the first thing
-  a reader will verify.
+## 5. What goes in the post
 
-## 5. What to publish next to the number
-
-- how many tasks, how many attempts, how many solved;
-- your success criterion in your own words;
-- retry tax (share of spend on failed attempts) and cache share;
-- limits: one repository, one model, small sample, task boundaries are your own call;
-- the question you want answered back.
+How many tasks, how many attempts, how many solved. Your success criterion in your own
+words. The failed-attempt share and the retry tax. The cache share if you have it. The
+limits: one repository, one model, small sample, task boundaries are your call. Then the
+question you want answered back, because that is what turns a number into a conversation.
