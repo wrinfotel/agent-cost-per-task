@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Cost per successful task for coding agents.
+
+Reads a CSV log of agent attempts and reports the numbers that actually matter:
+cost per attempt vs cost per *successful* task, the retry tax, and the cache share.
+
+Input CSV columns (header required):
+    task_id,outcome,attempt_no,input_tokens,cached_tokens,output_tokens,tool_calls,duration_min,cost_usd
+
+  task_id        your own label for the task; one task may have several attempts
+  outcome        success | fail   (success = your pre-registered criterion was met)
+  attempt_no     1, 2, 3 ... within that task
+  input_tokens   total input tokens of that attempt
+  cached_tokens  how many of the input tokens were cache hits
+  output_tokens  generated tokens
+  tool_calls     number of tool/function calls in the attempt
+  duration_min   wall-clock minutes of the attempt
+  cost_usd       measured or computed cost of the attempt (empty = unknown)
+
+Usage:
+    python3 parse.py sample.csv
+    python3 parse.py mylog.csv --out report.csv
+    python3 parse.py mylog.csv --review-rate 25   # $/hour for manual review, optional
+
+Stdlib only. No numbers are invented: everything printed is derived from the CSV.
+"""
+
+import argparse
+import csv
+import sys
+from collections import OrderedDict
+
+FIELDS = [
+    "task_id", "outcome", "attempt_no", "input_tokens", "cached_tokens",
+    "output_tokens", "tool_calls", "duration_min", "cost_usd",
+]
+
+
+def num(value):
+    """Parse a number, treating empty/unknown as None."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    if value == "" or value.lower() in {"na", "n/a", "unknown", "-"}:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def load(path):
+    tasks = OrderedDict()
+    unknown_cost_rows = 0
+    with open(path, newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        missing = [f for f in FIELDS if f not in (reader.fieldnames or [])]
+        if missing:
+            sys.exit(f"CSV is missing column(s): {', '.join(missing)}")
+        for row in reader:
+            task_id = (row.get("task_id") or "").strip()
+            if not task_id:
+                continue
+            cost = num(row.get("cost_usd"))
+            if cost is None:
+                unknown_cost_rows += 1
+            attempt = {
+                "outcome": (row.get("outcome") or "").strip().lower(),
+                "input_tokens": num(row.get("input_tokens")) or 0.0,
+                "cached_tokens": num(row.get("cached_tokens")) or 0.0,
+                "output_tokens": num(row.get("output_tokens")) or 0.0,
+                "tool_calls": num(row.get("tool_calls")) or 0.0,
+                "duration_min": num(row.get("duration_min")) or 0.0,
+                "cost_usd": cost or 0.0,
+            }
+            tasks.setdefault(task_id, []).append(attempt)
+    return tasks, unknown_cost_rows
+
+
+def summarize(tasks, review_rate=None):
+    total_attempts = 0
+    total_cost = 0.0
+    fail_cost = 0.0
+    input_tokens = 0.0
+    cached_tokens = 0.0
+    output_tokens = 0.0
+    duration = 0.0
+    successful = 0
+    attempts_on_success = 0
+
+    for task_id, attempts in tasks.items():
+        total_attempts += len(attempts)
+        solved = any(a["outcome"] == "success" for a in attempts)
+        if solved:
+            successful += 1
+            attempts_on_success += len(attempts)
+        for a in attempts:
+            total_cost += a["cost_usd"]
+            input_tokens += a["input_tokens"]
+            cached_tokens += a["cached_tokens"]
+            output_tokens += a["output_tokens"]
+            duration += a["duration_min"]
+            if not solved and a["outcome"] != "success":
+                fail_cost += a["cost_usd"]
+
+    review_cost = (duration / 60.0) * review_rate if review_rate else 0.0
+    grand_total = total_cost + review_cost
+
+    return {
+        "tasks": len(tasks),
+        "successful": successful,
+        "total_attempts": total_attempts,
+        "total_cost": total_cost,
+        "review_cost": review_cost,
+        "grand_total": grand_total,
+        "cost_per_attempt": (grand_total / total_attempts) if total_attempts else None,
+        "cost_per_success": (grand_total / successful) if successful else None,
+        "retry_tax": (fail_cost / total_cost * 100.0) if total_cost else None,
+        "cache_share": (cached_tokens / input_tokens * 100.0) if input_tokens else None,
+        "attempts_per_success": (attempts_on_success / successful) if successful else None,
+        "input_tokens": input_tokens,
+        "cached_tokens": cached_tokens,
+        "output_tokens": output_tokens,
+        "duration_min": duration,
+    }
+
+
+def write_report(tasks, path):
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow([
+            "task_id", "attempts", "solved", "cost_usd", "input_tokens",
+            "cached_tokens", "output_tokens", "tool_calls", "duration_min",
+        ])
+        for task_id, attempts in tasks.items():
+            writer.writerow([
+                task_id,
+                len(attempts),
+                "yes" if any(a["outcome"] == "success" for a in attempts) else "no",
+                f"{sum(a['cost_usd'] for a in attempts):.4f}",
+                int(sum(a["input_tokens"] for a in attempts)),
+                int(sum(a["cached_tokens"] for a in attempts)),
+                int(sum(a["output_tokens"] for a in attempts)),
+                int(sum(a["tool_calls"] for a in attempts)),
+                f"{sum(a['duration_min'] for a in attempts):.1f}",
+            ])
+
+
+def fmt(value, pattern="{:.4f}"):
+    return "n/a" if value is None else pattern.format(value)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("csv_path")
+    parser.add_argument("--out", default=None, help="write per-task report to this CSV")
+    parser.add_argument("--review-rate", type=float, default=None,
+                        help="cost per hour of manual review, in the same currency as cost_usd")
+    args = parser.parse_args()
+
+    tasks, unknown_cost_rows = load(args.csv_path)
+    if not tasks:
+        sys.exit("No rows with task_id found — nothing to report.")
+
+    s = summarize(tasks, args.review_rate)
+
+    print(f"Tasks:            {s['tasks']} ({s['successful']} solved, "
+          f"{s['tasks'] - s['successful']} not solved)")
+    print(f"Attempts:         {s['total_attempts']}")
+    print(f"Measured cost:    ${s['total_cost']:.4f}")
+    if args.review_rate:
+        print(f"Review cost:      ${s['review_cost']:.4f} (@ ${args.review_rate:.2f}/h)")
+        print(f"Total:            ${s['grand_total']:.4f}")
+    print(f"Cost per attempt: ${fmt(s['cost_per_attempt'])}")
+    if s["cost_per_success"] is None:
+        print("Cost per successful task: undefined — 0 tasks met the success criterion")
+    else:
+        print(f"Cost per successful task: ${s['cost_per_success']:.4f}")
+    print(f"Retry tax:        {fmt(s['retry_tax'], '{:.1f}%')} of spend went to failed attempts")
+    print(f"Cache share:      {fmt(s['cache_share'], '{:.1f}%')} of input tokens were cache hits")
+    print(f"Attempts/success: {fmt(s['attempts_per_success'], '{:.2f}')}")
+    print(f"Wall-clock:       {s['duration_min']:.1f} min total, "
+          f"{s['duration_min'] / s['total_attempts']:.1f} min per attempt")
+
+    if unknown_cost_rows:
+        print(f"\nWarning: {unknown_cost_rows} row(s) had no cost_usd — "
+              f"treated as 0. Add costs before publishing numbers.")
+
+    print("\nLimits to state next to these numbers:")
+    print("  · one repo / one setup / one model — not a benchmark")
+    print("  · 'success' is your own criterion (tests, review), not an objective truth")
+    print("  · task boundaries are a judgement call; retries depend on where you cut them")
+    if s["successful"] and s["successful"] < 10:
+        print("  · fewer than 10 solved tasks: publish as a method, not as a benchmark")
+
+    if args.out:
+        write_report(tasks, args.out)
+        print(f"\nPer-task report written to {args.out}")
+
+
+if __name__ == "__main__":
+    main()
