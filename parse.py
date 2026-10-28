@@ -106,7 +106,8 @@ def load(path):
 def summarize(tasks, review_rate=None):
     total_attempts = 0
     total_cost = 0.0
-    fail_cost = 0.0
+    fail_cost = 0.0        # attempts belonging to tasks that never succeeded
+    fail_cost_all = 0.0    # every attempt that did not itself succeed
     input_tokens = 0.0
     cached_tokens = 0.0
     output_tokens = 0.0
@@ -126,8 +127,10 @@ def summarize(tasks, review_rate=None):
             cached_tokens += a["cached_tokens"]
             output_tokens += a["output_tokens"]
             duration += a["duration_min"]
-            if not solved and a["outcome"] != "success":
-                fail_cost += a["cost_usd"]
+            if a["outcome"] != "success":
+                fail_cost_all += a["cost_usd"]
+                if not solved:
+                    fail_cost += a["cost_usd"]
 
     review_cost = (duration / 60.0) * review_rate if review_rate else 0.0
     grand_total = total_cost + review_cost
@@ -141,6 +144,8 @@ def summarize(tasks, review_rate=None):
         "grand_total": grand_total,
         "cost_per_attempt": (grand_total / total_attempts) if total_attempts else None,
         "cost_per_success": (grand_total / successful) if successful else None,
+        "fail_cost_all": fail_cost_all,
+        "failed_attempts_share": (fail_cost_all / total_cost * 100.0) if total_cost else None,
         "retry_tax": (fail_cost / total_cost * 100.0) if total_cost else None,
         "cache_share": (cached_tokens / input_tokens * 100.0) if input_tokens else None,
         "attempts_per_success": (attempts_on_success / successful) if successful else None,
@@ -207,7 +212,9 @@ def main():
               f"do not publish as a complete figure")
     else:
         print(f"Cost per successful task: ${s['cost_per_success']:.4f}")
-    print(f"Retry tax:        {fmt(s['retry_tax'], '{:.1f}%')} of spend went to failed attempts")
+    print(f"Failed attempts:  {fmt(s['failed_attempts_share'], '{:.1f}%')} of spend went to attempts that failed "
+          f"(some of those tasks later succeeded)")
+    print(f"Retry tax:        {fmt(s['retry_tax'], '{:.1f}%')} of spend went to tasks that never succeeded")
     print(f"Cache share:      {fmt(s['cache_share'], '{:.1f}%')} of input tokens were cache hits")
     print(f"Attempts/success: {fmt(s['attempts_per_success'], '{:.2f}')}")
     print(f"Wall-clock:       {s['duration_min']:.1f} min total, "
