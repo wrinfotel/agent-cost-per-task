@@ -28,7 +28,7 @@ by zero.
 ```bash
 python3 parse.py sample.csv                    # demo data, 12 tasks
 python3 parse.py mylog.csv --out report.csv    # your log
-python3 parse.py mylog.csv --review-rate 25    # add $25/h of manual review to the total
+python3 parse.py mylog.csv --review-rate 25    # requires measured review_minutes per row
 ```
 
 Input CSV columns:
@@ -45,6 +45,11 @@ One row per attempt, several rows can share a `task_id`. Leave `cost_usd` empty 
 don't know it: every cost figure then comes out marked PARTIAL, with a note not to publish
 it as complete. Silently reading missing cost as zero is how you get a confident number
 that isn't true.
+
+When any attempt cost is missing, cost-based shares are also marked PARTIAL. In the
+per-task CSV, `cost_complete` is `no` and `cost_usd` is blank for a task with any
+missing attempt cost; known complete tasks retain their costs. The partial shares use
+only recorded costs and are not complete estimates of the true shares.
 
 ## The two failure numbers
 
@@ -66,8 +71,11 @@ them separately, or state how you allocated a share of the fee.
 
 Infrastructure, electricity and your own machine time: separate line, or omitted.
 
-Manual review time is included only when you pass `--review-rate`, and it is labelled as an
-assumption when it is.
+Manual review cost is included only when you pass `--review-rate`. Add a `review_minutes`
+column with the actual human review minutes for every attempt (use `0` when there was no
+review). The script rejects missing values rather than estimating review time from
+`duration_min`, which is the agent's elapsed time. The hourly rate remains an assumption.
+The supplied `sample.csv` does not contain review times, so run the demo without the flag.
 
 Tasks abandoned mid-flight still count as attempts. They cost money whether or not they
 produced a result.

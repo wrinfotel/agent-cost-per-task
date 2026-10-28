@@ -20,7 +20,7 @@ Input CSV columns (header required):
 Usage:
     python3 parse.py sample.csv
     python3 parse.py mylog.csv --out report.csv
-    python3 parse.py mylog.csv --review-rate 25   # $/hour for manual review, optional
+    python3 parse.py mylog.csv --review-rate 25   # requires review_minutes per row
 
 Stdlib only. No numbers are invented: everything printed is derived from the CSV.
 """
@@ -75,7 +75,7 @@ def num(value):
         return None
 
 
-def load(path):
+def load(path, review_rate=None):
     tasks = OrderedDict()
     unknown_cost_rows = 0
     with open(path, newline="", encoding="utf-8") as handle:
@@ -83,11 +83,16 @@ def load(path):
         columns, missing = resolve_columns(reader.fieldnames or [])
         if missing:
             sys.exit(f"CSV is missing column(s): {', '.join(missing)}")
+        if review_rate is not None and "review_minutes" not in (reader.fieldnames or []):
+            sys.exit("--review-rate requires a review_minutes column with measured human review time for every attempt")
         for row in reader:
             task_id = (row.get(columns["task_id"]) or "").strip()
             if not task_id:
                 continue
             cost = num(row.get(columns["cost_usd"]))
+            review_minutes = num(row.get("review_minutes"))
+            if review_rate is not None and (review_minutes is None or review_minutes < 0):
+                sys.exit(f"Invalid or missing review_minutes for task {task_id}; use 0 for no review")
             if cost is None:
                 unknown_cost_rows += 1
             attempt = {
@@ -97,7 +102,8 @@ def load(path):
                 "output_tokens": num(row.get(columns["output_tokens"])) or 0.0,
                 "tool_calls": num(row.get(columns["tool_calls"])) or 0.0,
                 "duration_min": num(row.get(columns["duration_min"])) or 0.0,
-                "cost_usd": cost or 0.0,
+                "cost_usd": cost,
+                "review_minutes": review_minutes,
             }
             tasks.setdefault(task_id, []).append(attempt)
     return tasks, unknown_cost_rows
@@ -112,6 +118,7 @@ def summarize(tasks, review_rate=None):
     cached_tokens = 0.0
     output_tokens = 0.0
     duration = 0.0
+    review_duration = 0.0
     successful = 0
     attempts_on_success = 0
 
@@ -122,17 +129,18 @@ def summarize(tasks, review_rate=None):
             successful += 1
             attempts_on_success += len(attempts)
         for a in attempts:
-            total_cost += a["cost_usd"]
+            total_cost += a["cost_usd"] if a["cost_usd"] is not None else 0.0
+            review_duration += a["review_minutes"] if a["review_minutes"] is not None else 0.0
             input_tokens += a["input_tokens"]
             cached_tokens += a["cached_tokens"]
             output_tokens += a["output_tokens"]
             duration += a["duration_min"]
             if a["outcome"] != "success":
-                fail_cost_all += a["cost_usd"]
+                fail_cost_all += a["cost_usd"] if a["cost_usd"] is not None else 0.0
                 if not solved:
-                    fail_cost += a["cost_usd"]
+                    fail_cost += a["cost_usd"] if a["cost_usd"] is not None else 0.0
 
-    review_cost = (duration / 60.0) * review_rate if review_rate else 0.0
+    review_cost = (review_duration / 60.0) * review_rate if review_rate is not None else 0.0
     grand_total = total_cost + review_cost
 
     return {
@@ -160,7 +168,7 @@ def write_report(tasks, path):
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow([
-            "task_id", "attempts", "solved", "cost_usd", "input_tokens",
+            "task_id", "attempts", "solved", "cost_usd", "cost_complete", "input_tokens",
             "cached_tokens", "output_tokens", "tool_calls", "duration_min",
         ])
         for task_id, attempts in tasks.items():
@@ -168,7 +176,8 @@ def write_report(tasks, path):
                 task_id,
                 len(attempts),
                 "yes" if any(a["outcome"] == "success" for a in attempts) else "no",
-                f"{sum(a['cost_usd'] for a in attempts):.4f}",
+                f"{sum(a['cost_usd'] for a in attempts):.4f}" if all(a['cost_usd'] is not None for a in attempts) else "",
+                "yes" if all(a['cost_usd'] is not None for a in attempts) else "no",
                 int(sum(a["input_tokens"] for a in attempts)),
                 int(sum(a["cached_tokens"] for a in attempts)),
                 int(sum(a["output_tokens"] for a in attempts)),
@@ -189,7 +198,9 @@ def main():
                         help="cost per hour of manual review, in the same currency as cost_usd")
     args = parser.parse_args()
 
-    tasks, unknown_cost_rows = load(args.csv_path)
+    if args.review_rate is not None and args.review_rate < 0:
+        parser.error("--review-rate cannot be negative")
+    tasks, unknown_cost_rows = load(args.csv_path, args.review_rate)
     if not tasks:
         sys.exit("No rows with task_id found — nothing to report.")
 
@@ -201,9 +212,9 @@ def main():
           f"{s['tasks'] - s['successful']} not solved)")
     print(f"Attempts:         {s['total_attempts']}")
     print(f"Measured cost:    ${s['total_cost']:.4f}{caveat}")
-    if args.review_rate:
+    if args.review_rate is not None:
         print(f"Review cost:      ${s['review_cost']:.4f} (@ ${args.review_rate:.2f}/h)")
-        print(f"Total:            ${s['grand_total']:.4f}")
+        print(f"Total:            ${s['grand_total']:.4f}{caveat}")
     print(f"Cost per attempt: ${fmt(s['cost_per_attempt'])}{caveat}")
     if s["cost_per_success"] is None:
         print("Cost per successful task: undefined — 0 tasks met the success criterion")
@@ -212,9 +223,9 @@ def main():
               f"do not publish as a complete figure")
     else:
         print(f"Cost per successful task: ${s['cost_per_success']:.4f}")
-    print(f"Failed attempts:  {fmt(s['failed_attempts_share'], '{:.1f}%')} of spend went to attempts that failed "
+    print(f"Failed attempts:  {fmt(s['failed_attempts_share'], '{:.1f}%')}{caveat} of spend went to attempts that failed "
           f"(some of those tasks later succeeded)")
-    print(f"Retry tax:        {fmt(s['retry_tax'], '{:.1f}%')} of spend went to tasks that never succeeded")
+    print(f"Retry tax:        {fmt(s['retry_tax'], '{:.1f}%')}{caveat} of spend went to tasks that never succeeded")
     print(f"Cache share:      {fmt(s['cache_share'], '{:.1f}%')} of input tokens were cache hits")
     print(f"Attempts/success: {fmt(s['attempts_per_success'], '{:.2f}')}")
     print(f"Wall-clock:       {s['duration_min']:.1f} min total, "
