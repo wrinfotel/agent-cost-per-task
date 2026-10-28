@@ -37,8 +37,15 @@ Input CSV columns:
 task_id,outcome,attempt_no,input_tokens,cached_tokens,output_tokens,tool_calls,duration_min,cost_usd
 ```
 
-One row per attempt. Several rows may share a `task_id`. Leave `cost_usd` empty when
-the cost is unknown — the script warns you rather than silently treating it as a fact.
+Alternative spellings are accepted, so a longer schema also works as-is:
+`attempt_outcome` for `outcome`, `cached_input_tokens` for `cached_tokens`,
+`measured_cost_usd` for `cost_usd`. Other recognised-but-unused columns
+(`task_final_outcome`, `tool_cost_usd`, `model`, `date`) are ignored.
+
+One row per attempt. Several rows may share a `task_id`. Leave `cost_usd` empty when the
+cost is unknown: the report then marks every cost figure as **PARTIAL** and tells you not
+to publish it as a complete number, instead of quietly treating missing cost as zero.
+
 
 ## What is NOT counted
 

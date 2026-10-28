@@ -35,6 +35,32 @@ FIELDS = [
     "output_tokens", "tool_calls", "duration_min", "cost_usd",
 ]
 
+# Accepted spellings, so the two log schemas people actually use both work:
+#   outcome        -> outcome | attempt_outcome
+#   cached_tokens  -> cached_tokens | cached_input_tokens
+#   cost_usd       -> cost_usd | measured_cost_usd
+ALIASES = {
+    "outcome": ("outcome", "attempt_outcome"),
+    "cached_tokens": ("cached_tokens", "cached_input_tokens"),
+    "cost_usd": ("cost_usd", "measured_cost_usd"),
+}
+# Recognised but unused: task_final_outcome, tool_cost_usd, model, date, notes
+
+
+def resolve_columns(fieldnames):
+    """Map canonical field -> actual column name; report what is missing."""
+    columns = {}
+    missing = []
+    for field in FIELDS:
+        for name in ALIASES.get(field, (field,)):
+            if name in fieldnames:
+                columns[field] = name
+                break
+        else:
+            missing.append(field)
+    return columns, missing
+
+
 
 def num(value):
     """Parse a number, treating empty/unknown as None."""
@@ -54,23 +80,23 @@ def load(path):
     unknown_cost_rows = 0
     with open(path, newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
-        missing = [f for f in FIELDS if f not in (reader.fieldnames or [])]
+        columns, missing = resolve_columns(reader.fieldnames or [])
         if missing:
             sys.exit(f"CSV is missing column(s): {', '.join(missing)}")
         for row in reader:
-            task_id = (row.get("task_id") or "").strip()
+            task_id = (row.get(columns["task_id"]) or "").strip()
             if not task_id:
                 continue
-            cost = num(row.get("cost_usd"))
+            cost = num(row.get(columns["cost_usd"]))
             if cost is None:
                 unknown_cost_rows += 1
             attempt = {
-                "outcome": (row.get("outcome") or "").strip().lower(),
-                "input_tokens": num(row.get("input_tokens")) or 0.0,
-                "cached_tokens": num(row.get("cached_tokens")) or 0.0,
-                "output_tokens": num(row.get("output_tokens")) or 0.0,
-                "tool_calls": num(row.get("tool_calls")) or 0.0,
-                "duration_min": num(row.get("duration_min")) or 0.0,
+                "outcome": (row.get(columns["outcome"]) or "").strip().lower(),
+                "input_tokens": num(row.get(columns["input_tokens"])) or 0.0,
+                "cached_tokens": num(row.get(columns["cached_tokens"])) or 0.0,
+                "output_tokens": num(row.get(columns["output_tokens"])) or 0.0,
+                "tool_calls": num(row.get(columns["tool_calls"])) or 0.0,
+                "duration_min": num(row.get(columns["duration_min"])) or 0.0,
                 "cost_usd": cost or 0.0,
             }
             tasks.setdefault(task_id, []).append(attempt)
@@ -163,17 +189,22 @@ def main():
         sys.exit("No rows with task_id found — nothing to report.")
 
     s = summarize(tasks, args.review_rate)
+    incomplete = unknown_cost_rows > 0
+    caveat = f" (PARTIAL — {unknown_cost_rows} attempt(s) have no recorded cost)" if incomplete else ""
 
     print(f"Tasks:            {s['tasks']} ({s['successful']} solved, "
           f"{s['tasks'] - s['successful']} not solved)")
     print(f"Attempts:         {s['total_attempts']}")
-    print(f"Measured cost:    ${s['total_cost']:.4f}")
+    print(f"Measured cost:    ${s['total_cost']:.4f}{caveat}")
     if args.review_rate:
         print(f"Review cost:      ${s['review_cost']:.4f} (@ ${args.review_rate:.2f}/h)")
         print(f"Total:            ${s['grand_total']:.4f}")
-    print(f"Cost per attempt: ${fmt(s['cost_per_attempt'])}")
+    print(f"Cost per attempt: ${fmt(s['cost_per_attempt'])}{caveat}")
     if s["cost_per_success"] is None:
         print("Cost per successful task: undefined — 0 tasks met the success criterion")
+    elif incomplete:
+        print(f"Cost per successful task: ${s['cost_per_success']:.4f}{caveat} — "
+              f"do not publish as a complete figure")
     else:
         print(f"Cost per successful task: ${s['cost_per_success']:.4f}")
     print(f"Retry tax:        {fmt(s['retry_tax'], '{:.1f}%')} of spend went to failed attempts")
